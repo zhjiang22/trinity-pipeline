@@ -2,7 +2,7 @@
 set -e
 
 # Trinity Pipeline installer
-# Installs: gstack + humanize + superpowers + skill file
+# Installs: gstack + humanize + superpowers + skill file + stop hook
 
 BLUE='\033[0;34m'
 GREEN='\033[0;32m'
@@ -18,9 +18,10 @@ fail()  { echo -e "${RED}[trinity]${NC} $1"; exit 1; }
 # ─── Preflight checks ────────────────────────────────────────
 command -v claude >/dev/null 2>&1 || fail "Claude Code not found. Install: https://docs.anthropic.com/en/docs/claude-code"
 command -v git    >/dev/null 2>&1 || fail "git not found."
+command -v jq     >/dev/null 2>&1 || fail "jq not found. Install: sudo apt install jq"
 
-# ─── Detect script directory ─────────────────────────────────
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+TRINITY_DIR="$HOME/.claude/trinity"
 
 # ─── Step 1: Install skill file ─────────────────────────────
 info "Installing /full-dev-pipeline skill..."
@@ -28,7 +29,62 @@ mkdir -p "$HOME/.claude/commands"
 cp "$SCRIPT_DIR/full-dev-pipeline.md" "$HOME/.claude/commands/full-dev-pipeline.md"
 ok "Skill installed: ~/.claude/commands/full-dev-pipeline.md"
 
-# ─── Step 2: Install gstack ─────────────────────────────────
+# ─── Step 2: Install hook scripts ───────────────────────────
+info "Installing hook scripts..."
+mkdir -p "$TRINITY_DIR/scripts"
+cp "$SCRIPT_DIR/scripts/trinity-stop-hook.sh" "$TRINITY_DIR/scripts/"
+cp "$SCRIPT_DIR/scripts/trinity-common.sh" "$TRINITY_DIR/scripts/"
+chmod +x "$TRINITY_DIR/scripts/trinity-stop-hook.sh"
+chmod +x "$TRINITY_DIR/scripts/trinity-common.sh"
+ok "Hook scripts installed: ~/.claude/trinity/scripts/"
+
+# ─── Step 3: Register Stop Hook ─────────────────────────────
+SETTINGS_FILE="$HOME/.claude/settings.json"
+HOOK_CMD="$TRINITY_DIR/scripts/trinity-stop-hook.sh"
+
+if [ -f "$SETTINGS_FILE" ]; then
+    # Check if hook already registered
+    if jq -e '.hooks.Stop[]? | select(.hooks[]?.command == "'"$HOOK_CMD"'")' "$SETTINGS_FILE" >/dev/null 2>&1; then
+        ok "Stop hook already registered."
+    else
+        info "Registering Stop hook in settings.json..."
+        HOOK_ENTRY='{"matcher": "", "hooks": [{"type": "command", "command": "'"$HOOK_CMD"'", "timeout": 7200}]}'
+
+        if jq -e '.hooks.Stop' "$SETTINGS_FILE" >/dev/null 2>&1; then
+            # Stop array exists, append
+            jq '.hooks.Stop += ['"$HOOK_ENTRY"']' "$SETTINGS_FILE" > "${SETTINGS_FILE}.tmp"
+        else
+            # No Stop hooks yet, create
+            jq '.hooks.Stop = ['"$HOOK_ENTRY"']' "$SETTINGS_FILE" > "${SETTINGS_FILE}.tmp"
+        fi
+        mv "${SETTINGS_FILE}.tmp" "$SETTINGS_FILE"
+        ok "Stop hook registered."
+    fi
+else
+    # Create minimal settings with hook
+    info "Creating settings.json with Stop hook..."
+    cat > "$SETTINGS_FILE" << EOJSON
+{
+  "hooks": {
+    "Stop": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$HOOK_CMD",
+            "timeout": 7200
+          }
+        ]
+      }
+    ]
+  }
+}
+EOJSON
+    ok "Settings created with Stop hook."
+fi
+
+# ─── Step 4: Install gstack ─────────────────────────────────
 if [ -d "$HOME/.claude/skills/gstack" ]; then
     info "gstack already installed, updating..."
     cd "$HOME/.claude/skills/gstack" && git pull --ff-only 2>/dev/null || true
@@ -41,7 +97,7 @@ info "Building gstack..."
 cd "$HOME/.claude/skills/gstack" && ./setup
 ok "gstack installed."
 
-# ─── Step 3: Install humanize plugin ────────────────────────
+# ─── Step 5: Install humanize plugin ────────────────────────
 info "Installing humanize plugin..."
 if claude plugins list 2>/dev/null | grep -q "humanize@humania"; then
     ok "humanize already installed."
@@ -51,7 +107,7 @@ else
     ok "humanize installed."
 fi
 
-# ─── Step 4: Install superpowers plugin ─────────────────────
+# ─── Step 6: Install superpowers plugin ─────────────────────
 info "Installing superpowers plugin..."
 if claude plugins list 2>/dev/null | grep -q "superpowers@superpowers-marketplace"; then
     ok "superpowers already installed."
@@ -61,11 +117,11 @@ else
     ok "superpowers installed."
 fi
 
-# ─── Step 5: Check codex CLI ────────────────────────────────
+# ─── Step 7: Check codex CLI ────────────────────────────────
 if command -v codex >/dev/null 2>&1; then
     ok "codex CLI found: $(codex --version 2>/dev/null || echo 'installed')"
 else
-    warn "codex CLI not found. RLCR loop requires it."
+    warn "codex CLI not found. RLCR loop (Phase 5) requires it."
     warn "Install: npm install -g @openai/codex"
 fi
 
@@ -73,13 +129,13 @@ fi
 echo ""
 ok "================================================"
 ok "  Trinity Pipeline installed successfully!"
+ok "  Hook-driven automatic phase advancement"
 ok "================================================"
 echo ""
 info "Usage:  /full-dev-pipeline [your idea]"
-info "Flags:  --lite (skip reviews)  --deploy (enable deploy)"
+info "Flags:  --lite  --deploy  --skip-phase N  --resume N"
 echo ""
-info "Components:"
-info "  gstack      → /office-hours /review /qa /cso /ship"
-info "  humanize    → /humanize:gen-plan /humanize:start-rlcr-loop"
-info "  superpowers → brainstorming, verification, TDD"
+info "Mechanism:"
+info "  Stop Hook → reads .trinity/state.md → advances phase → injects prompt"
+info "  State persists on disk, survives context compression"
 echo ""

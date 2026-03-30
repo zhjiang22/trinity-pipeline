@@ -2,7 +2,9 @@
 
 > **gstack + Humanize + Superpowers = One-Person Software Factory**
 
-A Claude Code skill that orchestrates three best-in-class AI development systems into a single end-to-end pipeline. From a one-sentence idea to a shipped PR in one command.
+A **hook-driven** Claude Code pipeline that orchestrates three best-in-class AI development systems. From a one-sentence idea to a shipped PR in one command.
+
+**State persists on disk** (`.trinity/state.md`), survives context compression. A Stop Hook automatically advances phases — no manual tracking needed.
 
 ## What It Does
 
@@ -125,25 +127,57 @@ Syncs main, runs tests, audits coverage, pushes, creates PR. Deploy is opt-in wi
 - `/document-release` — Updates all project docs to match changes
 - `/retro` — Engineering retrospective with shipping metrics
 
+## How It Works — Stop Hook Mechanism
+
+Inspired by Humanize's RLCR loop architecture:
+
+```
+Claude finishes Phase N → writes .trinity/phase-N-summary.md → tries to stop
+                                                                      ↓
+                                              Trinity Stop Hook fires (trinity-stop-hook.sh)
+                                                                      ↓
+                                              Reads .trinity/state.md → current_phase: N
+                                              Checks phase-N-summary.md exists? YES
+                                                                      ↓
+                                              Advances current_phase to N+1
+                                              Generates Phase N+1 prompt
+                                              Outputs JSON: {"decision": "block", ...}
+                                                                      ↓
+                                              Claude continues with Phase N+1 prompt injected
+```
+
+**Key design:**
+- State lives on disk (`.trinity/state.md`), not in Claude's context window
+- Each phase writes a summary file — this is the completion signal
+- No summary file = hook allows stop (prevents infinite loops)
+- Phase 5 (RLCR): Trinity hook **defers** to Humanize's hook during active RLCR rounds
+
+```
+.trinity/
+├── state.md              # Pipeline state (current_phase, topic, flags)
+├── phase-0-summary.md    # Phase 0 completion artifact
+├── phase-1-summary.md    # Phase 1 completion artifact
+├── ...
+└── complete-state.md     # Pipeline done (renamed from state.md)
+```
+
 ## Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                    Trinity Pipeline                          │
-│                  /full-dev-pipeline                          │
+│              /full-dev-pipeline + Stop Hook                  │
 ├─────────────────────────────────────────────────────────────┤
 │                                                             │
 │  ┌──────────────┐  ┌──────────────┐  ┌──────────────────┐  │
 │  │   gstack     │  │  Humanize    │  │  Superpowers     │  │
 │  │              │  │              │  │                  │  │
 │  │ /office-hours│  │ gen-plan     │  │ git-worktrees    │  │
-│  │ /plan-*      │  │ refine-plan  │  │ brainstorming    │  │
-│  │ /review      │  │ start-rlcr   │  │ verification     │  │
-│  │ /codex       │  │ BitLesson    │  │ TDD              │  │
-│  │ /qa          │  │              │  │ finishing-branch  │  │
-│  │ /cso         │  │              │  │                  │  │
-│  │ /ship        │  │              │  │                  │  │
-│  │ /retro       │  │              │  │                  │  │
+│  │ /plan-*      │  │ refine-plan  │  │ verification     │  │
+│  │ /review      │  │ start-rlcr   │  │ TDD              │  │
+│  │ /codex       │  │ BitLesson    │  │ finishing-branch  │  │
+│  │ /qa  /cso    │  │              │  │                  │  │
+│  │ /ship /retro │  │              │  │                  │  │
 │  └──────────────┘  └──────────────┘  └──────────────────┘  │
 │                                                             │
 └─────────────────────────────────────────────────────────────┘
