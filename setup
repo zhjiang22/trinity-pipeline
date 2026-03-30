@@ -1,0 +1,85 @@
+#!/usr/bin/env bash
+set -e
+
+# Trinity Pipeline installer
+# Installs: gstack + humanize + superpowers + skill file
+
+BLUE='\033[0;34m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+RED='\033[0;31m'
+NC='\033[0m'
+
+info()  { echo -e "${BLUE}[trinity]${NC} $1"; }
+ok()    { echo -e "${GREEN}[trinity]${NC} $1"; }
+warn()  { echo -e "${YELLOW}[trinity]${NC} $1"; }
+fail()  { echo -e "${RED}[trinity]${NC} $1"; exit 1; }
+
+# ─── Preflight checks ────────────────────────────────────────
+command -v claude >/dev/null 2>&1 || fail "Claude Code not found. Install: https://docs.anthropic.com/en/docs/claude-code"
+command -v git    >/dev/null 2>&1 || fail "git not found."
+
+# ─── Detect script directory ─────────────────────────────────
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+# ─── Step 1: Install skill file ─────────────────────────────
+info "Installing /full-dev-pipeline skill..."
+mkdir -p "$HOME/.claude/commands"
+cp "$SCRIPT_DIR/full-dev-pipeline.md" "$HOME/.claude/commands/full-dev-pipeline.md"
+ok "Skill installed: ~/.claude/commands/full-dev-pipeline.md"
+
+# ─── Step 2: Install gstack ─────────────────────────────────
+if [ -d "$HOME/.claude/skills/gstack" ]; then
+    info "gstack already installed, updating..."
+    cd "$HOME/.claude/skills/gstack" && git pull --ff-only 2>/dev/null || true
+else
+    info "Installing gstack..."
+    command -v bun >/dev/null 2>&1 || fail "bun not found. Install: curl -fsSL https://bun.sh/install | bash"
+    git clone --single-branch --depth 1 https://github.com/garrytan/gstack.git "$HOME/.claude/skills/gstack"
+fi
+info "Building gstack..."
+cd "$HOME/.claude/skills/gstack" && ./setup
+ok "gstack installed."
+
+# ─── Step 3: Install humanize plugin ────────────────────────
+info "Installing humanize plugin..."
+if claude plugins list 2>/dev/null | grep -q "humanize@humania"; then
+    ok "humanize already installed."
+else
+    claude plugins marketplace add humania-org/humanize 2>/dev/null || true
+    claude plugins install humanize@humania 2>/dev/null
+    ok "humanize installed."
+fi
+
+# ─── Step 4: Install superpowers plugin ─────────────────────
+info "Installing superpowers plugin..."
+if claude plugins list 2>/dev/null | grep -q "superpowers@superpowers-marketplace"; then
+    ok "superpowers already installed."
+else
+    claude plugins marketplace add superpowers-marketplace/superpowers 2>/dev/null || true
+    claude plugins install superpowers@superpowers-marketplace 2>/dev/null
+    ok "superpowers installed."
+fi
+
+# ─── Step 5: Check codex CLI ────────────────────────────────
+if command -v codex >/dev/null 2>&1; then
+    ok "codex CLI found: $(codex --version 2>/dev/null || echo 'installed')"
+else
+    warn "codex CLI not found. RLCR loop requires it."
+    warn "Install: npm install -g @openai/codex"
+fi
+
+# ─── Done ────────────────────────────────────────────────────
+echo ""
+ok "================================================"
+ok "  Trinity Pipeline installed successfully!"
+ok "================================================"
+echo ""
+info "Usage:  /full-dev-pipeline [your idea]"
+info "Flags:  --lite (skip reviews)  --deploy (enable deploy)"
+echo ""
+info "Components:"
+info "  gstack      → /office-hours /review /qa /cso /ship"
+info "  humanize    → /humanize:gen-plan /humanize:start-rlcr-loop"
+info "  superpowers → brainstorming, verification, TDD"
+echo ""
